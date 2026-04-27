@@ -1,0 +1,20 @@
+# 飞书应用配置（从飞书开放平台获取）
+feishu:
+  app_id: "cli_xxx"
+  app_secret: "xxx"
+  brand: "feishu"          # feishu | lark
+
+# Bot 配置
+bot:
+  # 授权用户 open_id 白名单
+  allowed_users:
+    - "ou_xxx"
+  # Claude Code 单次对话最大轮数
+  max_turns: 10
+  # Claude Code 子进程超时（秒）
+  timeout_seconds: 300
+
+# E2E 测试配置
+test:
+  # 测试用群聊 chat_id（lark-cli im +messages-send 的目标）
+  chat_id: ""

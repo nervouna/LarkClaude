@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // .tool_response.filePath' | { read -r f; if echo \"$f\" | grep -qE '\\.mjs$'; then output=$(node --check \"$f\" 2>&1); if [ $? -ne 0 ]; then echo \"{\\\"hookSpecificOutput\\\":{\\\"hookEventName\\\":\\\"PostToolUse\\\",\\\"additionalContext\\\":\\\"Syntax error in $f:\\\\n$output\\\"}}\"; fi; fi; }",
+            "timeout": 10,
+            "statusMessage": "Checking syntax..."
+          }
+        ]
+      }
+    ]
+  }
+}

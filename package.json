@@ -1,0 +1,14 @@
+{
+  "name": "claude-feishu-bot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Feishu bot bridge to local Claude Code",
+  "scripts": {
+    "start": "node index.mjs"
+  },
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.50.0",
+    "js-yaml": "^4.1.0"
+  }
+}
