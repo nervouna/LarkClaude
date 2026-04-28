@@ -1,6 +1,7 @@
 import { readFile, access } from 'node:fs/promises';
+import { randomInt } from 'node:crypto';
 import { load as parseYaml } from 'js-yaml';
-import { init, startEventLoop, replyText, replyCard, patchMessage } from './lib/feishu.mjs';
+import { init, startEventLoop, replyText } from './lib/feishu.mjs';
 import { run } from './lib/claude.mjs';
 import * as session from './lib/session.mjs';
 
@@ -8,6 +9,49 @@ const CONFIG_FILE = new URL('./config.yaml', import.meta.url).pathname;
 
 // in-memory auth state — resets on restart
 const authorizedUsers = new Set();
+
+// one-time startup auth code — printed to terminal, consumed on first successful /auth
+const MAX_AUTH_ATTEMPTS = 5;
+let authCode = null;
+let authAttempts = 0;
+
+function generateAuthCode() {
+  authCode = String(randomInt(100_000, 1_000_000));
+  authAttempts = 0;
+  const line = '═'.repeat(44);
+  console.log(`\n${line}`);
+  console.log(`  授权码: ${authCode}`);
+  console.log(`  在飞书对机器人发送: /auth ${authCode}`);
+  console.log(`${line}\n`);
+}
+
+async function handleAuthMessage({ content, senderId, messageId }) {
+  const match = content?.trim().match(/^\/auth\s+(\S+)/);
+  if (!match) {
+    await replyText({ messageId, text: '未授权。请发送 /auth <code>，code 在机器人启动时打印在终端。' });
+    return;
+  }
+  if (!authCode) {
+    await replyText({ messageId, text: '授权码已失效，请重启机器人以生成新码。' });
+    return;
+  }
+  if (match[1] !== authCode) {
+    authAttempts++;
+    if (authAttempts >= MAX_AUTH_ATTEMPTS) {
+      authCode = null;
+      console.error('[auth] max attempts reached, code invalidated');
+      await replyText({ messageId, text: '授权码错误次数过多，码已失效。请重启机器人。' });
+    } else {
+      await replyText({ messageId, text: `授权码错误（${authAttempts}/${MAX_AUTH_ATTEMPTS}）` });
+    }
+    return;
+  }
+  authorizedUsers.add(senderId);
+  authCode = null;
+  session.setAuthorizedUser(senderId).catch(err => console.error('persist auth:', err.message));
+  console.log(`[auth] ${senderId} authorized`);
+  await replyText({ messageId, text: '授权成功，可以开始对话了。' });
+}
 
 // per-session lock: serialize Claude Code calls on the same session
 const sessionLocks = new Map();
@@ -31,37 +75,6 @@ async function loadConfig() {
 
 function isSlashCommand(content) {
   return /^\/\w+/.test(content?.trim());
-}
-
-function buildAuthCard(openId) {
-  return {
-    config: { wide_screen_mode: true },
-    header: { template: 'blue', title: { tag: 'plain_text', content: 'Claude Code Bot' } },
-    elements: [
-      { tag: 'div', text: { tag: 'lark_md', content: '点击下方按钮授权此飞书用户访问本地 Claude Code。' } },
-      {
-        tag: 'action',
-        actions: [{
-          tag: 'button',
-          text: { tag: 'lark_md', content: '确认授权' },
-          type: 'primary',
-          value: { action: 'authorize', open_id: openId },
-          confirm: {
-            title: { tag: 'plain_text', content: '确认授权？' },
-            text: { tag: 'plain_text', content: '授权后该飞书用户可控制本地 Claude Code。' },
-          },
-        }],
-      },
-    ],
-  };
-}
-
-function buildAuthorizedCard() {
-  return {
-    config: { wide_screen_mode: true },
-    header: { template: 'green', title: { tag: 'plain_text', content: '已授权' } },
-    elements: [{ tag: 'div', text: { tag: 'lark_md', content: '授权成功！现在可以开始对话了。' } }],
-  };
 }
 
 async function handleSlashCommand({ content, messageId }) {
@@ -163,8 +176,7 @@ async function main() {
 
         // authorization gate
         if (!authorizedUsers.has(senderId)) {
-          const card = buildAuthCard(senderId);
-          await replyCard({ messageId, card });
+          await handleAuthMessage({ content, senderId, messageId });
           return;
         }
 
@@ -214,40 +226,9 @@ async function main() {
         await replyText({ messageId, text: `error: ${err.message}` }).catch(() => {});
       }
     },
-
-    onCardAction: async (data) => {
-      console.log('card action:', JSON.stringify(data).slice(0, 300));
-
-      const value = data?.action?.value;
-      if (!value || value.action !== 'authorize') return;
-
-      const openId = value.open_id;
-      if (!openId) return;
-
-      // sync: in-memory first
-      authorizedUsers.add(openId);
-      console.log(`authorized: ${openId}`);
-
-      // async: persist in background (don't await — 3s timeout)
-      session.setAuthorizedUser(openId).catch(err =>
-        console.error('persist auth error:', err.message)
-      );
-
-      // update card via PATCH API (fire-and-forget)
-      const msgId = data?.context?.open_message_id;
-      if (msgId) {
-        patchMessage({ messageId: msgId, card: buildAuthorizedCard() }).catch(err =>
-          console.error('patch card error:', err.message)
-        );
-      }
-
-      // return toast only — card update handled by PATCH above
-      return {
-        toast: { type: 'success', content: '授权成功' },
-      };
-    },
   });
 
+  generateAuthCode();
   console.log('ready');
 }
 
